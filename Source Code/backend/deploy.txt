@@ -1,0 +1,1 @@
+scp -r * btliot@40.82.129.148:~/iot-backend

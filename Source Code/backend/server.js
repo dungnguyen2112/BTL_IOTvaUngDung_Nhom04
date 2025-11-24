@@ -23,6 +23,7 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: '/ws' });
 
 let latestEsp32Data = null;
+let latestEsp32Image = null;
 
 const broadcast = (message, exceptSocket) => {
   wss.clients.forEach((client) => {
@@ -50,6 +51,42 @@ wss.on('connection', (socket, req) => {
         latestEsp32Data = { ...payload, receivedAt: Date.now() };
         console.log('ESP32 data:', latestEsp32Data);
         broadcast({ type: 'server:data', payload: latestEsp32Data }, socket);
+        return;
+      }
+
+      if (type === 'esp32:image') {
+        const { filename, contentType, data } = payload || {};
+
+        if (!filename || !contentType || !data) {
+          socket.send(
+            JSON.stringify({
+              type: 'server:error',
+              payload: 'Missing filename/contentType/data for esp32:image',
+            })
+          );
+          return;
+        }
+
+        latestEsp32Image = {
+          filename,
+          contentType,
+          data,
+          receivedAt: Date.now(),
+          size: Buffer.byteLength(data, 'base64'),
+        };
+
+        console.log(
+          `ESP32 image: ${filename} (${latestEsp32Image.size} bytes base64)`
+        );
+
+        socket.send(
+          JSON.stringify({
+            type: 'server:image:ack',
+            payload: { filename, receivedAt: latestEsp32Image.receivedAt },
+          })
+        );
+
+        broadcast({ type: 'server:image', payload: latestEsp32Image }, socket);
         return;
       }
 
@@ -85,6 +122,14 @@ app.get('/health', (req, res) => {
     status: 'ok',
     timestamp: Date.now(),
     latestEsp32Data,
+    latestEsp32Image: latestEsp32Image
+      ? {
+          filename: latestEsp32Image.filename,
+          contentType: latestEsp32Image.contentType,
+          receivedAt: latestEsp32Image.receivedAt,
+          size: latestEsp32Image.size,
+        }
+      : null,
   });
 });
 
