@@ -1,0 +1,9 @@
+com\example\smarttrash\controller\DashboardController.class
+com\example\smarttrash\SmartTrashApplication.class
+com\example\smarttrash\config\SecurityConfig.class
+com\example\smarttrash\model\DashboardOverview.class
+com\example\smarttrash\model\LastClassification.class
+com\example\smarttrash\model\DeviceInfo.class
+com\example\smarttrash\model\Settings.class
+com\example\smarttrash\model\LogEntry.class
+com\example\smarttrash\service\DashboardService.class
