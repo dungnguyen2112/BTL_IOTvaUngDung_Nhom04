@@ -5,10 +5,9 @@ import './index.css';
 type Props = {
   apiBaseUrl: string;
   onLoginSuccess: (payload: { authHeader: string; username: string }) => void;
-  onRegisterClick: () => void;
 };
 
-const Login: React.FC<Props> = ({ apiBaseUrl, onLoginSuccess, onRegisterClick }) => {
+const Login: React.FC<Props> = ({ apiBaseUrl, onLoginSuccess }) => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -81,19 +80,6 @@ const Login: React.FC<Props> = ({ apiBaseUrl, onLoginSuccess, onRegisterClick })
               {loading ? 'Đang đăng nhập...' : 'Đăng nhập'}
             </button>
           </form>
-
-          <div className="mt-6 text-center">
-            <p className="text-gray-600 text-sm">
-              Chưa có tài khoản?{' '}
-              <button
-                type="button"
-                onClick={onRegisterClick}
-                className="text-blue-600 hover:text-blue-700 font-bold hover:underline"
-              >
-                Đăng ký ngay
-              </button>
-            </p>
-          </div>
         </div>
       </div>
     </div>

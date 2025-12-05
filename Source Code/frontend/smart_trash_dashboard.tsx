@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Camera, Trash2, AlertTriangle, TrendingUp, Calendar, Download, RefreshCw, Wifi, WifiOff } from 'lucide-react';
 import Login from './Login';
-import Register from './Register';
 
 const SmartTrashDashboard = () => {
   const [activeTab, setActiveTab] = useState('overview');
@@ -60,7 +59,6 @@ const SmartTrashDashboard = () => {
 
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [authHeader, setAuthHeader] = useState<string | null>(null);
-  const [showRegister, setShowRegister] = useState(false);
   const [currentUser, setCurrentUser] = useState<string | null>(null);
 
   const apiBaseUrl = 'http://localhost:8080/api';
@@ -156,19 +154,6 @@ const SmartTrashDashboard = () => {
   }, [isAuthenticated, authHeader]);
 
   if (!isAuthenticated || !authHeader) {
-    if (showRegister) {
-      return (
-        <Register
-          apiBaseUrl={apiBaseUrl}
-          onRegisterSuccess={() => {
-            setShowRegister(false);
-            setError(null);
-          }}
-          onBackToLogin={() => setShowRegister(false)}
-        />
-      );
-    }
-
     return (
       <Login
         apiBaseUrl={apiBaseUrl}
@@ -178,7 +163,6 @@ const SmartTrashDashboard = () => {
           setIsAuthenticated(true);
           setError(null);
         }}
-        onRegisterClick={() => setShowRegister(true)}
       />
     );
   }
