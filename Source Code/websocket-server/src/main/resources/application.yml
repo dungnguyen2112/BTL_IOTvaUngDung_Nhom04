@@ -1,0 +1,47 @@
+server:
+  port: ${PORT:4000}
+  tomcat:
+    max-http-header-size: 104857600
+    max-swallow-size: 104857600
+    connection-timeout: 600000
+    threads:
+      max: 200
+
+spring:
+  application:
+    name: iot-websocket-server
+  servlet:
+    multipart:
+      max-file-size: 100MB
+      max-request-size: 100MB
+  websocket:
+    max-text-message-buffer-size: 104857600
+    max-binary-message-buffer-size: 104857600
+  
+# CORS configuration
+cors:
+  allowed-origins: ${CLIENT_ORIGINS:*}
+
+# Logging configuration
+logging:
+  level:
+    root: INFO
+    com.iot.websocket: DEBUG
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
+    file: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n"
+  file:
+    name: logs/websocket-server.log
+    max-size: 10MB
+    max-history: 7
+    total-size-cap: 100MB
+
+# Actuator endpoints
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: always
