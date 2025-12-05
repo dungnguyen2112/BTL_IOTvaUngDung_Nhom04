@@ -1,11 +1,10 @@
 
 /** @type {import('tailwindcss').Config} */
 module.exports = {
-  // Only scan our app files, NOT node_modules (fixes performance warning)
+  // Scan all TypeScript/JavaScript files in the project
   content: [
     './index.html',
-    './main.tsx',
-    './smart_trash_dashboard.tsx',
+    './**/*.{tsx,ts,jsx,js}',
   ],
   theme: {
     extend: {},

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Camera, Trash2, AlertTriangle, TrendingUp, Calendar, Download, RefreshCw, Wifi, WifiOff } from 'lucide-react';
 import Login from './Login';
+import Register from './Register';
 
 const SmartTrashDashboard = () => {
   const [activeTab, setActiveTab] = useState('overview');
@@ -11,10 +12,12 @@ const SmartTrashDashboard = () => {
     type: 'organic' | 'inorganic';
     confidence: number;
     time: string;
+    imageUrl?: string;
   }>({
     type: 'organic',
     confidence: 0,
-    time: '-'
+    time: '-',
+    imageUrl: undefined
   });
 
   const [isLoading, setIsLoading] = useState(false);
@@ -57,6 +60,7 @@ const SmartTrashDashboard = () => {
 
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [authHeader, setAuthHeader] = useState<string | null>(null);
+  const [showRegister, setShowRegister] = useState(false);
   const [currentUser, setCurrentUser] = useState<string | null>(null);
 
   const apiBaseUrl = 'http://localhost:8080/api';
@@ -95,7 +99,8 @@ const SmartTrashDashboard = () => {
         setLastClassification({
           type: overview.lastClassification?.type === 'inorganic' ? 'inorganic' : 'organic',
           confidence: overview.lastClassification?.confidence ?? 0,
-          time: overview.lastClassification?.time ?? '-'
+          time: overview.lastClassification?.time ?? '-',
+          imageUrl: overview.lastClassification?.imageUrl
         });
 
         setStats(prev => [
@@ -151,6 +156,19 @@ const SmartTrashDashboard = () => {
   }, [isAuthenticated, authHeader]);
 
   if (!isAuthenticated || !authHeader) {
+    if (showRegister) {
+      return (
+        <Register
+          apiBaseUrl={apiBaseUrl}
+          onRegisterSuccess={() => {
+            setShowRegister(false);
+            setError(null);
+          }}
+          onBackToLogin={() => setShowRegister(false)}
+        />
+      );
+    }
+
     return (
       <Login
         apiBaseUrl={apiBaseUrl}
@@ -160,6 +178,7 @@ const SmartTrashDashboard = () => {
           setIsAuthenticated(true);
           setError(null);
         }}
+        onRegisterClick={() => setShowRegister(true)}
       />
     );
   }
@@ -231,22 +250,33 @@ const SmartTrashDashboard = () => {
           </div>
         </div>
 
-        {/* Live Camera Feed */}
+        {/* Latest Classification Image */}
         <div className="bg-white rounded-lg shadow-md p-6">
           <div className="flex justify-between items-center mb-4">
-            <h3 className="text-lg font-semibold">Camera trực tiếp</h3>
+            <h3 className="text-lg font-semibold">Ảnh rác vừa phân loại</h3>
             <Camera className="w-5 h-5 text-gray-400" />
           </div>
           <div className="bg-gray-900 rounded-lg aspect-video flex items-center justify-center relative overflow-hidden">
-            <div className="absolute inset-0 bg-gradient-to-br from-gray-800 to-gray-900"></div>
-            <div className="relative z-10 text-center">
-              <Camera className="w-16 h-16 text-gray-600 mx-auto mb-2" />
-              <p className="text-gray-400 text-sm">Đang chờ dữ liệu camera...</p>
-            </div>
-            <div className="absolute top-2 right-2 bg-red-500 text-white px-2 py-1 rounded text-xs flex items-center">
-              <span className="w-2 h-2 bg-white rounded-full mr-1 animate-pulse"></span>
-              LIVE
-            </div>
+            {lastClassification.imageUrl ? (
+              <img 
+                src={lastClassification.imageUrl} 
+                alt="Rác vừa phân loại" 
+                className="w-full h-full object-cover"
+              />
+            ) : (
+              <>
+                <div className="absolute inset-0 bg-gradient-to-br from-gray-800 to-gray-900"></div>
+                <div className="relative z-10 text-center">
+                  <Camera className="w-16 h-16 text-gray-600 mx-auto mb-2" />
+                  <p className="text-gray-400 text-sm">Chưa có ảnh phân loại...</p>
+                </div>
+              </>
+            )}
+            {lastClassification.imageUrl && (
+              <div className={`absolute top-2 right-2 ${lastClassification.type === 'organic' ? 'bg-green-500' : 'bg-blue-500'} text-white px-3 py-1 rounded-full text-xs font-semibold`}>
+                {lastClassification.type === 'organic' ? 'Hữu cơ' : 'Vô cơ'}
+              </div>
+            )}
           </div>
           <div className="mt-4 bg-gray-50 rounded p-3">
             <div className="flex justify-between text-sm">
