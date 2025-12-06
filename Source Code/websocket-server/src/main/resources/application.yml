@@ -1,22 +1,22 @@
 server:
   port: ${PORT:4000}
   tomcat:
-    max-http-header-size: 104857600
-    max-swallow-size: 104857600
+    max-http-header-size: 2097152
+    max-swallow-size: 2097152
     connection-timeout: 600000
     threads:
-      max: 200
+      max: 50
 
 spring:
   application:
     name: iot-websocket-server
   servlet:
     multipart:
-      max-file-size: 100MB
-      max-request-size: 100MB
+      max-file-size: 2MB
+      max-request-size: 2MB
   websocket:
-    max-text-message-buffer-size: 104857600
-    max-binary-message-buffer-size: 104857600
+    max-text-message-buffer-size: 2097152
+    max-binary-message-buffer-size: 2097152
   
 # CORS configuration
 cors:

@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ESP32 Camera Simulator</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #333;
+            border-bottom: 3px solid #4CAF50;
+            padding-bottom: 10px;
+        }
+        .status {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 5px;
+            font-weight: bold;
+        }
+        .connected {
+            background: #d4edda;
+            color: #155724;
+        }
+        .disconnected {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        button {
+            background: #4CAF50;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            margin: 5px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        button:hover {
+            background: #45a049;
+        }
+        button:disabled {
+            background: #cccccc;
+            cursor: not-allowed;
+        }
+        .camera-section {
+            margin: 20px 0;
+            padding: 20px;
+            border: 2px dashed #ddd;
+            border-radius: 5px;
+        }
+        #imagePreview {
+            max-width: 100%;
+            margin-top: 10px;
+            border-radius: 5px;
+        }
+        .log {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 5px;
+            max-height: 300px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 12px;
+            margin-top: 20px;
+        }
+        .log-entry {
+            margin: 5px 0;
+            padding: 5px;
+            border-left: 3px solid #007bff;
+            padding-left: 10px;
+        }
+        .log-send {
+            border-left-color: #28a745;
+        }
+        .log-receive {
+            border-left-color: #ffc107;
+        }
+        .log-error {
+            border-left-color: #dc3545;
+        }
+        input[type="file"] {
+            margin: 10px 0;
+        }
+        .motor-action {
+            background: #ff9800;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 5px;
+            display: none;
+        }
+        .motor-action.show {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎥 ESP32 Camera Simulator</h1>
+        
+        <div id="status" class="status disconnected">
+            ⚫ Disconnected
+        </div>
+
+        <div>
+            <button id="connectBtn" onclick="connect()">Connect to Server</button>
+            <button id="disconnectBtn" onclick="disconnect()" disabled>Disconnect</button>
+        </div>
+
+        <div class="camera-section">
+            <h3>📷 Camera Capture</h3>
+            <input type="file" id="imageInput" accept="image/*" onchange="previewImage()">
+            <button id="sendImageBtn" onclick="sendImage()" disabled>Send Image to AI</button>
+            <br>
+            <img id="imagePreview" style="display:none;">
+        </div>
+
+        <div id="motorAction" class="motor-action">
+            <strong>🔧 Motor Action Received:</strong>
+            <div id="motorCommand"></div>
+        </div>
+
+        <div class="log">
+            <strong>📋 Event Log:</strong>
+            <div id="logContent"></div>
+        </div>
+    </div>
+
+    <script>
+        let ws = null;
+        let currentImageBase64 = null;
+
+        function connect() {
+            const serverUrl = 'wss://ntdung.systems/ws'; // Thay bằng ws://localhost:4000/ws nếu test local
+            
+            log('Connecting to ' + serverUrl + '...', 'send');
+            ws = new WebSocket(serverUrl);
+
+            ws.onopen = () => {
+                log('✅ Connected to WebSocket server', 'send');
+                document.getElementById('status').className = 'status connected';
+                document.getElementById('status').innerHTML = '🟢 Connected';
+                document.getElementById('connectBtn').disabled = true;
+                document.getElementById('disconnectBtn').disabled = false;
+                document.getElementById('sendImageBtn').disabled = false;
+
+                // Subscribe to command topic to receive motor commands
+                const subscribeMsg = {
+                    type: 'client:subscribe',
+                    payload: { topic: 'command' }
+                };
+                ws.send(JSON.stringify(subscribeMsg));
+                log('📡 Subscribed to command topic', 'send');
+            };
+
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                log('📨 Received: ' + data.type, 'receive');
+
+                if (data.type === 'server:image:ack') {
+                    log('✅ Image acknowledged by server: ' + data.payload.filename, 'receive');
+                }
+
+                if (data.type === 'ai:classify:result') {
+                    const result = data.payload;
+                    log(`🤖 AI Result: ${result.class} (${(result.confidence * 100).toFixed(1)}%)`, 'receive');
+                    log(`🔧 Motor Action: ${result.motorAction}`, 'receive');
+                    
+                    // Show motor action
+                    const motorDiv = document.getElementById('motorAction');
+                    const motorCmd = document.getElementById('motorCommand');
+                    motorDiv.className = 'motor-action show';
+                    motorCmd.innerHTML = `
+                        <p><strong>Class:</strong> ${result.class}</p>
+                        <p><strong>Confidence:</strong> ${(result.confidence * 100).toFixed(1)}%</p>
+                        <p><strong>Motor Command:</strong> ${result.motorAction}</p>
+                    `;
+
+                    // Simulate motor action
+                    setTimeout(() => {
+                        log(`⚙️ Executing motor action: ${result.motorAction}`, 'send');
+                        // Here you would control actual motor
+                    }, 500);
+                }
+
+                if (data.type === 'server:subscribed') {
+                    log('✅ Subscribed to: ' + data.payload.topic, 'receive');
+                }
+            };
+
+            ws.onerror = (error) => {
+                log('❌ WebSocket error', 'error');
+                console.error(error);
+            };
+
+            ws.onclose = () => {
+                log('⚫ Disconnected from server', 'error');
+                document.getElementById('status').className = 'status disconnected';
+                document.getElementById('status').innerHTML = '⚫ Disconnected';
+                document.getElementById('connectBtn').disabled = false;
+                document.getElementById('disconnectBtn').disabled = true;
+                document.getElementById('sendImageBtn').disabled = true;
+            };
+        }
+
+        function disconnect() {
+            if (ws) {
+                ws.close();
+                ws = null;
+            }
+        }
+
+        function previewImage() {
+            const file = document.getElementById('imageInput').files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                const img = document.getElementById('imagePreview');
+                img.src = e.target.result;
+                img.style.display = 'block';
+                
+                // Get base64 without data:image prefix
+                currentImageBase64 = e.target.result.split(',')[1];
+                log('📷 Image loaded: ' + file.name + ' (' + (file.size / 1024).toFixed(2) + ' KB)', 'send');
+            };
+            reader.readAsDataURL(file);
+        }
+
+        function sendImage() {
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                alert('Not connected to server!');
+                return;
+            }
+
+            if (!currentImageBase64) {
+                alert('Please select an image first!');
+                return;
+            }
+
+            const message = {
+                type: 'esp32:image',
+                payload: {
+                    filename: 'capture_' + Date.now() + '.jpg',
+                    contentType: 'image/jpeg',
+                    data: currentImageBase64
+                }
+            };
+
+            ws.send(JSON.stringify(message));
+            log('📤 Sent image to AI classification', 'send');
+            
+            // Hide previous motor action
+            document.getElementById('motorAction').className = 'motor-action';
+        }
+
+        function log(message, type = 'info') {
+            const logContent = document.getElementById('logContent');
+            const entry = document.createElement('div');
+            entry.className = 'log-entry log-' + type;
+            const timestamp = new Date().toLocaleTimeString();
+            entry.innerHTML = `[${timestamp}] ${message}`;
+            logContent.insertBefore(entry, logContent.firstChild);
+        }
+    </script>
+</body>
+</html>
