@@ -15,21 +15,30 @@ import os
 os.environ['TF_ENABLE_ONEDNN_OPTS'] = '1'
 
 def gen_labels():
-    # For the two-class waste_cnn.keras model
-    # 0 -> Recyclable, 1 -> Organic (matches user's sample predict_func)
-    return {0: "Recyclable", 1: "Organic"}
+    train = './Data/Train'
+    # If the training directory is not available at runtime, return empty mapping
+    if not os.path.isdir(train):
+        return {}
+    train_generator = ImageDataGenerator(rescale = 1/255)
+    train_generator = train_generator.flow_from_directory(
+        train,
+        target_size=(300, 300),
+        batch_size=32,
+        class_mode='sparse'
+    )
+    labels = train_generator.class_indices
+    # Invert to map index -> class_name
+    return dict((v, k) for k, v in labels.items())
 
-def preprocess(image):
-    image = image.convert('RGB')  # ✅ ép ảnh thành 3 kênh
-    image = image.resize((224, 224), Image.Resampling.LANCZOS)
-    img_array = np.array(image)
-    img_array = img_array / 255.0
+def preprocess(image, target_size=(300, 300)):
+    image = image.convert('RGB')  # ép ảnh thành 3 kênh
+    image = image.resize(target_size, Image.Resampling.LANCZOS)
+    img_array = np.array(image).astype(np.float32) / 255.0
     return img_array
 
 def map_two_classes(label: str) -> str:
-    # Map binary labels to Vietnamese categories
-    # Organic -> rác hữu cơ, Recyclable -> rác vô cơ
-    return "rác hữu cơ" if label.lower() == "organic" else "rác vô cơ"
+    # Map 6-class → 2-class (trash → rác hữu cơ, others → rác vô cơ)
+    return "rác hữu cơ" if label == "trash" else "rác vô cơ"
 
 def annotate_image(image: Image.Image, text: str) -> Image.Image:
     """

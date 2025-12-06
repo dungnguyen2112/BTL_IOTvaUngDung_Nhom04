@@ -17,6 +17,8 @@ from utils import (
     map_two_classes,
 )
 
+from tensorflow.keras.models import load_model
+
 
 DEFAULT_WS_URL = "wss://ntdung.systems/ws"
 
@@ -40,11 +42,36 @@ def _classify_pil_image(pil_image: Image.Image) -> Tuple[str, str]:
     """
     Returns (predicted_label, binary_label)
     """
-    img_arr = preprocess(pil_image)
-    preds = MODEL.predict(img_arr[np.newaxis, ...])
+    # Determine model input size dynamically (height, width)
+    try:
+        height = int(MODEL.input_shape[1])
+        width = int(MODEL.input_shape[2])
+        target_size = (width, height)  # PIL expects (width, height)
+    except Exception:
+        target_size = (300, 300)
+
+    img_arr = preprocess(pil_image, target_size=target_size)
+    preds = MODEL.predict(img_arr[np.newaxis, ...])  # shape: (1, num_classes)
     idx = int(np.argmax(preds[0], axis=-1))
-    pred_label = LABELS.get(idx, str(idx))
-    binary_label = map_two_classes(pred_label)
+
+    # Determine number of classes from the model output
+    try:
+        num_classes = int(MODEL.output_shape[-1])
+    except Exception:
+        num_classes = preds.shape[-1]
+
+    # If it's a binary model (2 classes), map directly without needing LABELS
+    if num_classes == 2:
+        pred_label = "Recyclable" if idx == 0 else "Organic"
+        binary_label = "rác vô cơ" if idx == 0 else "rác hữu cơ"
+    else:
+        # Multiclass: try to use LABELS if available, else fallback to index string
+        pred_label = LABELS.get(idx, str(idx)) if LABELS else str(idx)
+        # Attempt mapping via provided function; if unknown, default to "rác vô cơ"
+        try:
+            binary_label = map_two_classes(pred_label)
+        except Exception:
+            binary_label = "rác vô cơ"
     return pred_label, binary_label
 
 
@@ -154,9 +181,8 @@ async def main():
     global MODEL, LABELS
     print("Loading labels and model ...")
     LABELS = gen_labels()
-    # Load full Keras model saved in .keras format
-    from tensorflow.keras.models import load_model
-    MODEL = load_model("./weights/waste_cnn.keras")
+    # Load full SavedModel (.keras format) instead of building architecture + loading .h5 weights
+    MODEL = load_model("./weights/waste_cnn.keras", compile=False)
     print("Model loaded.")
 
     await run_client(DEFAULT_WS_URL)
