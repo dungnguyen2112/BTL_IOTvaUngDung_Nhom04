@@ -15,6 +15,7 @@ from utils import (
     gen_labels,
     annotate_image,
     map_two_classes,
+    predict_bgr_binary,
 )
 
 from tensorflow.keras.models import load_model
@@ -42,37 +43,12 @@ def _classify_pil_image(pil_image: Image.Image) -> Tuple[str, str]:
     """
     Returns (predicted_label, binary_label)
     """
-    # Determine model input size dynamically (height, width)
-    try:
-        height = int(MODEL.input_shape[1])
-        width = int(MODEL.input_shape[2])
-        target_size = (width, height)  # PIL expects (width, height)
-    except Exception:
-        target_size = (300, 300)
-
-    img_arr = preprocess(pil_image, target_size=target_size)
-    preds = MODEL.predict(img_arr[np.newaxis, ...])  # shape: (1, num_classes)
-    idx = int(np.argmax(preds[0], axis=-1))
-
-    # Determine number of classes from the model output
-    try:
-        num_classes = int(MODEL.output_shape[-1])
-    except Exception:
-        num_classes = preds.shape[-1]
-
-    # If it's a binary model (2 classes), map directly without needing LABELS
-    if num_classes == 2:
-        pred_label = "Recyclable" if idx == 0 else "Organic"
-        binary_label = "rác vô cơ" if idx == 0 else "rác hữu cơ"
-    else:
-        # Multiclass: try to use LABELS if available, else fallback to index string
-        pred_label = LABELS.get(idx, str(idx)) if LABELS else str(idx)
-        # Attempt mapping via provided function; if unknown, default to "rác vô cơ"
-        try:
-            binary_label = map_two_classes(pred_label)
-        except Exception:
-            binary_label = "rác vô cơ"
-    return pred_label, binary_label
+    # Convert PIL RGB → numpy BGR for predict_bgr_binary
+    rgb_arr = np.array(pil_image.convert("RGB"))
+    bgr_arr = rgb_arr[:, :, ::-1]
+    pred_en, prob, vi = predict_bgr_binary(bgr_arr, MODEL, show=False)
+    print("result:", pred_en, vi)
+    return pred_en, vi
 
 
 async def process_incoming_message(ws, message: str):
@@ -182,7 +158,7 @@ async def main():
     print("Loading labels and model ...")
     LABELS = gen_labels()
     # Load full SavedModel (.keras format) instead of building architecture + loading .h5 weights
-    MODEL = load_model("./weights/waste_cnn.keras", compile=False)
+    MODEL = load_model("./weights/waste_mobilenetv2_final.keras", compile=False)
     print("Model loaded.")
 
     await run_client(DEFAULT_WS_URL)

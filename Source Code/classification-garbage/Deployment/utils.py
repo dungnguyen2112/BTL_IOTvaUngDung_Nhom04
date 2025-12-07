@@ -5,6 +5,7 @@ from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
+from typing import Tuple
 
 
 
@@ -123,3 +124,48 @@ def model_arc():
     
 
     return model
+
+def predict_bgr_binary(img_bgr: np.ndarray, model, show: bool = False) -> Tuple[str, float, str]:
+    """
+    Predict using an OpenCV BGR image with a binary Keras model (.keras).
+    Returns (pred_label_en, confidence, binary_label_vi).
+    """
+    # Determine input size from model if possible
+    try:
+        height = int(model.input_shape[1])
+        width = int(model.input_shape[2])
+        target_size = (width, height)
+    except Exception:
+        target_size = (300, 300)
+
+    # Convert BGR (cv2) -> RGB and preprocess consistently with pipeline
+    img_rgb = img_bgr[..., ::-1]
+    pil_img = Image.fromarray(img_rgb)
+    img_arr = preprocess(pil_img, target_size=target_size)  # float32 [0,1], HxWx3
+
+    # Predict
+    preds = model.predict(img_arr[np.newaxis, ...])  # (1, C) or (1, 1)
+
+
+    # Handle sigmoid (1 unit) vs softmax (2 units)
+    if preds.shape[-1] == 1:
+        prob_organic = float(preds[0][0])
+        idx = 1 if prob_organic >= 0.5 else 0
+        confidence = prob_organic if idx == 1 else (1.0 - prob_organic)
+    else:
+        idx = int(np.argmax(preds[0], axis=-1))
+        confidence = float(np.max(preds[0]))
+    print("confidence:", confidence)
+    print("preds:", preds[0])
+    # Binary mapping consistent with ws_client
+    pred_label = "Organic" if idx == 0 else "Recyclable"
+    binary_label = "rác hữu cơ" if idx == 0 else "rác vô cơ"
+
+    # Optional visualize (no matplotlib dependency; use PIL show)
+    if show:
+        try:
+            pil_img.show()
+        except Exception:
+            pass
+
+    return pred_label, confidence, binary_label
