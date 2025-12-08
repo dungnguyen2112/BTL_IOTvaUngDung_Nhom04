@@ -14,8 +14,9 @@ import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 
 import java.io.IOException;
-import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.Base64;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.CopyOnWriteArraySet;
 
 @Slf4j
@@ -24,10 +25,6 @@ public class IoTWebSocketHandler extends TextWebSocketHandler {
 
     private final CopyOnWriteArraySet<WebSocketSession> sessions = new CopyOnWriteArraySet<>();
     private final ObjectMapper objectMapper = new ObjectMapper();
-    
-    // Topic subscriptions for targeted messaging
-    private final Map<String, CopyOnWriteArraySet<WebSocketSession>> topicSubscriptions = new ConcurrentHashMap<>();
-    private final Map<WebSocketSession, Set<String>> sessionTopics = new ConcurrentHashMap<>();
     
     private volatile Esp32Data latestEsp32Data = null;
     private volatile Esp32Image latestEsp32Image = null;
@@ -68,23 +65,14 @@ public class IoTWebSocketHandler extends TextWebSocketHandler {
                 return;
             }
 
-            log.info("Processing message type: {} from session: {}", type, session.getId());
+            log.debug("Received message type: {} from session: {}", type, session.getId());
 
             switch (type) {
                 case "esp32:data":
                     handleEsp32Data(session, payloadNode);
                     break;
                 case "esp32:image":
-                    handleEsp32ImageWithTopic(session, payloadNode, payload);
-                    break;
-                case "ai:classify:result":
-                    handleAIResult(session, payloadNode, payload);
-                    break;
-                case "client:subscribe":
-                    handleSubscribe(session, payloadNode);
-                    break;
-                case "client:unsubscribe":
-                    handleUnsubscribe(session, payloadNode);
+                    handleEsp32Image(session, payloadNode);
                     break;
                 case "esp32:ping":
                     handlePing(session);
@@ -124,7 +112,7 @@ public class IoTWebSocketHandler extends TextWebSocketHandler {
         broadcast(broadcastMsg, senderSession);
     }
 
-    private void handleEsp32ImageWithTopic(WebSocketSession senderSession, JsonNode payloadNode, String fullPayload) throws IOException {
+    private void handleEsp32Image(WebSocketSession senderSession, JsonNode payloadNode) throws IOException {
         String filename = payloadNode.has("filename") ? payloadNode.get("filename").asText() : null;
         String contentType = payloadNode.has("contentType") ? payloadNode.get("contentType").asText() : null;
         String data = payloadNode.has("data") ? payloadNode.get("data").asText() : null;
@@ -150,109 +138,16 @@ public class IoTWebSocketHandler extends TextWebSocketHandler {
         
         log.info("ESP32 image received: {} ({} bytes)", filename, size);
 
-        // Send acknowledgment to ESP32
+        // Send acknowledgment
         Map<String, Object> ackPayload = new HashMap<>();
         ackPayload.put("filename", filename);
         ackPayload.put("receivedAt", image.getReceivedAt());
-        ackPayload.put("size", size);
         WebSocketMessage ackMsg = new WebSocketMessage("server:image:ack", ackPayload);
         sendMessage(senderSession, ackMsg);
 
-        // Broadcast to image topic (Backend AI subscribes here)
-        broadcastToTopic("image", fullPayload, senderSession);
-        log.info("Image forwarded to image topic");
-    }
-    
-    // Handle AI classification result
-    private void handleAIResult(WebSocketSession senderSession, JsonNode payloadNode, String fullPayload) throws IOException {
-        String classification = payloadNode.has("class") ? payloadNode.get("class").asText() : "unknown";
-        double confidence = payloadNode.has("confidence") ? payloadNode.get("confidence").asDouble() : 0.0;
-        String motorAction = payloadNode.has("motorAction") ? payloadNode.get("motorAction").asText() : "none";
-        
-        log.info("AI Result received: class={}, confidence={}, motorAction={}", classification, confidence, motorAction);
-        
-        // Send result to ESP32 via command topic
-        broadcastToTopic("command", fullPayload, senderSession);
-        log.info("Control command sent to ESP32");
-        
-        // Also broadcast to dashboard for display
-        broadcastToTopic("dashboard/updates", fullPayload, senderSession);
-    }
-    
-    // Subscribe to topic
-    private void handleSubscribe(WebSocketSession session, JsonNode payloadNode) throws IOException {
-        String topic = payloadNode.has("topic") ? payloadNode.get("topic").asText() : null;
-        
-        if (topic == null || topic.isEmpty()) {
-            WebSocketMessage errorMsg = new WebSocketMessage("server:error", "Missing topic for subscription");
-            sendMessage(session, errorMsg);
-            return;
-        }
-        
-        topicSubscriptions.computeIfAbsent(topic, k -> new CopyOnWriteArraySet<>()).add(session);
-        sessionTopics.computeIfAbsent(session, k -> ConcurrentHashMap.newKeySet()).add(topic);
-        
-        log.info("Session {} subscribed to topic: {}", session.getId(), topic);
-        
-        Map<String, Object> response = new HashMap<>();
-        response.put("topic", topic);
-        response.put("message", "Successfully subscribed to " + topic);
-        WebSocketMessage msg = new WebSocketMessage("server:subscribed", response);
-        sendMessage(session, msg);
-    }
-    
-    // Unsubscribe from topic
-    private void handleUnsubscribe(WebSocketSession session, JsonNode payloadNode) throws IOException {
-        String topic = payloadNode.has("topic") ? payloadNode.get("topic").asText() : null;
-        
-        if (topic != null) {
-            CopyOnWriteArraySet<WebSocketSession> subscribers = topicSubscriptions.get(topic);
-            if (subscribers != null) {
-                subscribers.remove(session);
-            }
-            
-            Set<String> topics = sessionTopics.get(session);
-            if (topics != null) {
-                topics.remove(topic);
-            }
-            
-            log.info("Session {} unsubscribed from topic: {}", session.getId(), topic);
-            
-            Map<String, Object> response = new HashMap<>();
-            response.put("topic", topic);
-            response.put("message", "Successfully unsubscribed from " + topic);
-            WebSocketMessage msg = new WebSocketMessage("server:unsubscribed", response);
-            sendMessage(session, msg);
-        }
-    }
-    
-    // Broadcast to specific topic
-    private void broadcastToTopic(String topic, String message, WebSocketSession exclude) {
-        CopyOnWriteArraySet<WebSocketSession> subscribers = topicSubscriptions.get(topic);
-        
-        if (subscribers == null || subscribers.isEmpty()) {
-            log.debug("No subscribers for topic: {}", topic);
-            return;
-        }
-        
-        int sentCount = 0;
-        int failCount = 0;
-        
-        for (WebSocketSession session : subscribers) {
-            if (session.equals(exclude) || !session.isOpen()) {
-                continue;
-            }
-            
-            try {
-                session.sendMessage(new TextMessage(message));
-                sentCount++;
-            } catch (IOException e) {
-                failCount++;
-                log.error("Failed to send to session {}: {}", session.getId(), e.getMessage());
-            }
-        }
-        
-        log.debug("Broadcasted to topic '{}': {} sent, {} failed", topic, sentCount, failCount);
+        // Broadcast image to other clients
+        WebSocketMessage broadcastMsg = new WebSocketMessage("server:image", image);
+        broadcast(broadcastMsg, senderSession);
     }
 
     private void handlePing(WebSocketSession session) throws IOException {
@@ -264,21 +159,6 @@ public class IoTWebSocketHandler extends TextWebSocketHandler {
     @Override
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) throws Exception {
         sessions.remove(session);
-        
-        // Cleanup topic subscriptions
-        Set<String> topics = sessionTopics.remove(session);
-        if (topics != null) {
-            for (String topic : topics) {
-                CopyOnWriteArraySet<WebSocketSession> subscribers = topicSubscriptions.get(topic);
-                if (subscribers != null) {
-                    subscribers.remove(session);
-                    if (subscribers.isEmpty()) {
-                        topicSubscriptions.remove(topic);
-                    }
-                }
-            }
-        }
-        
         String remoteAddress = session.getRemoteAddress() != null 
                 ? session.getRemoteAddress().toString() 
                 : "unknown";
