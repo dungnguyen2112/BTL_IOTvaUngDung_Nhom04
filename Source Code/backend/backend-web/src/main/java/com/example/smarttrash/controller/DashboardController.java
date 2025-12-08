@@ -3,8 +3,10 @@ package com.example.smarttrash.controller;
 import com.example.smarttrash.model.DashboardOverview;
 import com.example.smarttrash.model.DeviceInfo;
 import com.example.smarttrash.model.LogEntry;
+import com.example.smarttrash.model.Esp32EventLog;
 import com.example.smarttrash.model.Settings;
 import com.example.smarttrash.service.DashboardService;
+import com.example.smarttrash.repository.Esp32EventLogRepository;
 import org.springframework.web.bind.annotation.CrossOrigin;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -20,9 +22,12 @@ import java.util.List;
 public class DashboardController {
 
     private final DashboardService dashboardService;
+    private final Esp32EventLogRepository esp32EventLogRepository;
 
-    public DashboardController(DashboardService dashboardService) {
+    public DashboardController(DashboardService dashboardService,
+                               Esp32EventLogRepository esp32EventLogRepository) {
         this.dashboardService = dashboardService;
+        this.esp32EventLogRepository = esp32EventLogRepository;
     }
 
     @GetMapping("/overview")
@@ -48,6 +53,11 @@ public class DashboardController {
     @GetMapping("/device")
     public DeviceInfo getDeviceInfo() {
         return dashboardService.getDeviceInfo();
+    }
+
+    @GetMapping("/events")
+    public List<Esp32EventLog> getEvents() {
+        return esp32EventLogRepository.findTop50ByFilenameNotNullOrderByReceivedAtDesc();
     }
 }
 

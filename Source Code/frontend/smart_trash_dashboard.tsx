@@ -1,10 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { Camera, Trash2, AlertTriangle, TrendingUp, Calendar, Download, RefreshCw, Wifi, WifiOff } from 'lucide-react';
+import { Camera, Trash2, AlertTriangle, Calendar, RefreshCw, Wifi, WifiOff } from 'lucide-react';
 import Login from './Login';
 
 const SmartTrashDashboard = () => {
   const [activeTab, setActiveTab] = useState('overview');
   const [isConnected, setIsConnected] = useState(true);
+  const [liveImageUrl, setLiveImageUrl] = useState<string | undefined>(undefined);
+  const [trashType, setTrashType] = useState<'organic' | 'inorganic' | 'unknown'>('unknown');
+  const [binType, setBinType] = useState<string | null>(null); // ORGANIC hoặc INORGANIC khi cảnh báo
   const [organicLevel, setOrganicLevel] = useState(0);
   const [inorganicLevel, setInorganicLevel] = useState(0);
   const [lastClassification, setLastClassification] = useState<{
@@ -31,13 +34,6 @@ const SmartTrashDashboard = () => {
       color: 'bg-blue-500'
     },
     {
-      title: 'Độ chính xác TB',
-      value: '0%',
-      change: '',
-      icon: <TrendingUp className="w-6 h-6" />,
-      color: 'bg-green-500'
-    },
-    {
       title: 'Hôm nay',
       value: '0',
       change: '',
@@ -54,7 +50,7 @@ const SmartTrashDashboard = () => {
   ]);
 
   const [recentLogs, setRecentLogs] = useState<
-    { time: string; type: 'Hữu cơ' | 'Vô cơ'; confidence: number; status: string }[]
+    { time: string; type: 'Hữu cơ' | 'Vô cơ' | 'Chưa rõ'; source: string }[]
   >([]);
 
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -62,15 +58,146 @@ const SmartTrashDashboard = () => {
   const [currentUser, setCurrentUser] = useState<string | null>(null);
 
   const apiBaseUrl = 'http://localhost:8080/api';
+  const socketUrl = 'wss://ntdung.systems/ws';
 
   const handleLogout = () => {
     setIsAuthenticated(false);
     setAuthHeader(null);
     setCurrentUser(null);
+    localStorage.removeItem('authHeader');
+    localStorage.removeItem('username');
+  };
+
+  // Restore session on reload
+  useEffect(() => {
+    const savedAuth = localStorage.getItem('authHeader');
+    const savedUser = localStorage.getItem('username');
+    if (savedAuth && savedUser) {
+      setAuthHeader(savedAuth);
+      setCurrentUser(savedUser);
+      setIsAuthenticated(true);
+    }
+  }, []);
+
+  const appendEvent = (typeLabel: 'Hữu cơ' | 'Vô cơ' | 'Chưa rõ', source: string, receivedAt?: number) => {
+    setRecentLogs(prev => {
+      const formatter = new Intl.DateTimeFormat('vi-VN', {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit'
+      });
+      const timeStr = receivedAt ? formatter.format(new Date(receivedAt)) : formatter.format(new Date());
+      const updated = [{ time: timeStr, type: typeLabel, source }, ...prev];
+      return updated.slice(0, 50);
+    });
   };
 
   useEffect(() => {
     if (!isAuthenticated || !authHeader) return;
+    let ws: WebSocket | null = null;
+    let liveInterval: ReturnType<typeof setInterval>;
+
+    const connectWebSocket = () => {
+      ws = new WebSocket(socketUrl);
+      ws.onopen = () => setIsConnected(true);
+      ws.onclose = () => setIsConnected(false);
+      ws.onerror = () => setIsConnected(false);
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+
+          const dataVal = msg?.payload?.data || msg?.data || msg?.latestEsp32Data?.data;
+          if (dataVal === 'ROTATE_CW') {
+            setTrashType('inorganic');
+            setLastClassification(prev => ({ ...prev, type: 'inorganic' }));
+            appendEvent('Vô cơ', 'WebSocket', msg?.payload?.receivedAt || msg?.latestEsp32Data?.receivedAt);
+          } else if (dataVal === 'ROTATE_CCW') {
+            setTrashType('organic');
+            setLastClassification(prev => ({ ...prev, type: 'organic' }));
+            appendEvent('Hữu cơ', 'WebSocket', msg?.payload?.receivedAt || msg?.latestEsp32Data?.receivedAt);
+          }
+
+          // Xử lý cảnh báo từ binType trong WebSocket message
+          const binTypeVal = msg?.latestEsp32Data?.binType || msg?.payload?.binType;
+          if (binTypeVal && (binTypeVal === 'ORGANIC' || binTypeVal === 'INORGANIC')) {
+            setBinType(binTypeVal);
+          } else if (!binTypeVal || binTypeVal === '') {
+            setBinType(null);
+          }
+
+          if (msg?.latestEsp32Image?.data) {
+            const url = `data:${msg.latestEsp32Image.contentType || 'image/jpeg'};base64,${msg.latestEsp32Image.data}`;
+            setLiveImageUrl(url);
+            setLastClassification(prev => ({
+              ...prev,
+              imageUrl: url,
+              time: msg.latestEsp32Image.receivedAt
+                ? new Date(msg.latestEsp32Image.receivedAt).toLocaleTimeString('vi-VN')
+                : prev.time,
+              type: prev.type
+            }));
+          }
+          if (msg?.latestEsp32Data?.data) {
+            setIsConnected(true);
+          }
+        } catch (e) {
+          console.error('Invalid WS payload', e);
+        }
+      };
+    };
+
+    connectWebSocket();
+
+    const loadLive = async () => {
+      try {
+        const res = await fetch(`${apiBaseUrl}/live`, {
+          headers: { Authorization: authHeader }
+        });
+        if (!res.ok) throw new Error('Không thể tải dữ liệu live từ backend');
+        const live = await res.json();
+
+        if (live?.status === 'ok' && (live?.activeConnections ?? 0) > 0) {
+          setIsConnected(true);
+        }
+
+        if (live?.trashType) {
+          if (live.trashType === 'organic' || live.trashType === 'inorganic') {
+            setTrashType(live.trashType);
+            setLastClassification(prev => ({ ...prev, type: live.trashType === 'organic' ? 'organic' : 'inorganic' }));
+          }
+        }
+
+        // Xử lý cảnh báo từ binType
+        if (live?.binType && (live.binType === 'ORGANIC' || live.binType === 'INORGANIC')) {
+          setBinType(live.binType);
+        } else if (live?.latestEsp32Data?.binType && (live.latestEsp32Data.binType === 'ORGANIC' || live.latestEsp32Data.binType === 'INORGANIC')) {
+          setBinType(live.latestEsp32Data.binType);
+        } else {
+          // Nếu không có binType hoặc binType rỗng, xóa cảnh báo
+          setBinType(null);
+        }
+
+        // Chỉ cập nhật ảnh khi có ảnh mới thực sự, không reset về undefined
+        if (live?.latestEsp32Image?.data) {
+          const url = `data:${live.latestEsp32Image.contentType || 'image/jpeg'};base64,${live.latestEsp32Image.data}`;
+          setLiveImageUrl(url);
+          setLastClassification(prev => ({
+            ...prev,
+            imageUrl: url,
+            time: live.latestEsp32Image.receivedAt
+              ? new Date(live.latestEsp32Image.receivedAt).toLocaleTimeString('vi-VN')
+              : prev.time
+          }));
+        }
+        // Nếu không có ảnh mới, giữ nguyên ảnh hiện tại (không làm gì cả)
+      } catch {
+        setIsConnected(false);
+      }
+    };
+
+    loadLive();
+    liveInterval = setInterval(loadLive, 5000);
+
     const loadOverviewAndLogs = async () => {
       try {
         setIsLoading(true);
@@ -80,7 +207,7 @@ const SmartTrashDashboard = () => {
           fetch(`${apiBaseUrl}/overview`, {
             headers: { Authorization: authHeader }
           }),
-          fetch(`${apiBaseUrl}/logs`, {
+          fetch(`${apiBaseUrl}/events`, {
             headers: { Authorization: authHeader }
           })
         ]);
@@ -94,31 +221,29 @@ const SmartTrashDashboard = () => {
 
         setOrganicLevel(overview.organicLevel ?? 0);
         setInorganicLevel(overview.inorganicLevel ?? 0);
-        setLastClassification({
-          type: overview.lastClassification?.type === 'inorganic' ? 'inorganic' : 'organic',
-          confidence: overview.lastClassification?.confidence ?? 0,
-          time: overview.lastClassification?.time ?? '-',
-          imageUrl: overview.lastClassification?.imageUrl
-        });
+
+        // Chỉ cập nhật ảnh nếu có ảnh mới, giữ nguyên nếu không có
+        setLastClassification(prev => ({
+          type: overview.lastClassification?.type === 'inorganic' ? 'inorganic' :
+            overview.lastClassification?.type === 'organic' ? 'organic' : prev.type,
+          confidence: overview.lastClassification?.confidence ?? prev.confidence,
+          time: overview.lastClassification?.time ?? prev.time,
+          imageUrl: overview.lastClassification?.imageUrl ?? prev.imageUrl  // Giữ nguyên nếu không có ảnh mới
+        }));
 
         setStats(prev => [
           {
             ...prev[0],
             value: overview.totalClassifications?.toLocaleString('vi-VN') ?? '0',
-            change: '+12%'
+            change: ''
           },
           {
             ...prev[1],
-            value: `${overview.averageAccuracy ?? 0}%`,
-            change: '+2.1%'
+            value: `${overview.todayCount ?? 0}`,
+            change: ''
           },
           {
             ...prev[2],
-            value: `${overview.todayCount ?? 0}`,
-            change: '+8'
-          },
-          {
-            ...prev[3],
             value: `${overview.alertCount ?? 0}`,
             change: overview.alertMessage ?? ''
           }
@@ -131,11 +256,10 @@ const SmartTrashDashboard = () => {
         });
 
         setRecentLogs(
-          (logs as any[]).map(log => ({
-            time: formatter.format(new Date(log.timestamp)),
-            type: log.type === 'Vô cơ' ? 'Vô cơ' : 'Hữu cơ',
-            confidence: log.confidence,
-            status: log.status
+          (logs as any[]).map((log: any) => ({
+            time: formatter.format(new Date(log.receivedAt)),
+            type: log.trashType === 'inorganic' ? 'Vô cơ' : log.trashType === 'organic' ? 'Hữu cơ' : 'Chưa rõ',
+            source: log.filename || (log.eventType === 'IMAGE' ? 'Ảnh mới' : 'WebSocket')
           }))
         );
 
@@ -150,7 +274,11 @@ const SmartTrashDashboard = () => {
 
     loadOverviewAndLogs();
     const interval = setInterval(loadOverviewAndLogs, 10000);
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(interval);
+      if (liveInterval) clearInterval(liveInterval);
+      if (ws) ws.close();
+    };
   }, [isAuthenticated, authHeader]);
 
   if (!isAuthenticated || !authHeader) {
@@ -162,135 +290,134 @@ const SmartTrashDashboard = () => {
           setCurrentUser(username);
           setIsAuthenticated(true);
           setError(null);
+          localStorage.setItem('authHeader', authHeader);
+          localStorage.setItem('username', username);
         }}
       />
     );
   }
 
-  const renderOverview = () => (
-    <div className="space-y-6">
-      {/* Stats Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        {stats.map((stat, index) => (
-          <div key={index} className="bg-white rounded-lg shadow-md p-6 hover:shadow-lg transition-shadow">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-gray-500 text-sm">{stat.title}</p>
-                <h3 className="text-2xl font-bold mt-1">{stat.value}</h3>
-                <p className="text-sm text-green-600 mt-1">{stat.change}</p>
-              </div>
-              <div className={`${stat.color} text-white p-3 rounded-lg`}>
-                {stat.icon}
-              </div>
-            </div>
-          </div>
-        ))}
-      </div>
+  const renderOverview = () => {
+    const alertStat = stats.find(s => s.title === 'Cảnh báo');
+    const otherStats = stats.filter(s => s.title !== 'Cảnh báo');
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Bin Level Status */}
-        <div className="bg-white rounded-lg shadow-md p-6">
-          <h3 className="text-lg font-semibold mb-4">Mức đầy thùng rác</h3>
-          {error && (
-            <p className="text-xs text-red-600 mb-3">
-              {error}
-            </p>
-          )}
+    // Xác định cảnh báo từ binType
+    const alertMessage = binType === 'ORGANIC'
+      ? 'Rác hữu cơ đầy!'
+      : binType === 'INORGANIC'
+        ? 'Rác vô cơ đầy!'
+        : alertStat?.change || 'Ổn định';
+    const hasAlert = binType === 'ORGANIC' || binType === 'INORGANIC';
 
-          {/* Organic Bin */}
-          <div className="mb-6">
-            <div className="flex justify-between items-center mb-2">
-              <span className="text-sm font-medium text-gray-700">Rác hữu cơ</span>
-              <span className="text-sm font-bold text-green-600">{organicLevel.toFixed(1)}%</span>
-            </div>
-            <div className="w-full bg-gray-200 rounded-full h-4 overflow-hidden">
-              <div
-                className={`h-full rounded-full transition-all duration-500 ${organicLevel > 90 ? 'bg-red-500' : organicLevel > 75 ? 'bg-orange-500' : 'bg-green-500'
-                  }`}
-                style={{ width: `${organicLevel}%` }}
-              />
-            </div>
-            {organicLevel > 75 && (
-              <p className="text-xs text-orange-600 mt-1 flex items-center">
-                <AlertTriangle className="w-3 h-3 mr-1" />
-                {organicLevel > 90 ? 'Cần đổ rác ngay!' : 'Sắp đầy'}
-              </p>
-            )}
-          </div>
-
-          {/* Inorganic Bin */}
-          <div>
-            <div className="flex justify-between items-center mb-2">
-              <span className="text-sm font-medium text-gray-700">Rác vô cơ</span>
-              <span className="text-sm font-bold text-blue-600">{inorganicLevel.toFixed(1)}%</span>
-            </div>
-            <div className="w-full bg-gray-200 rounded-full h-4 overflow-hidden">
-              <div
-                className={`h-full rounded-full transition-all duration-500 ${inorganicLevel > 90 ? 'bg-red-500' : inorganicLevel > 75 ? 'bg-orange-500' : 'bg-blue-500'
-                  }`}
-                style={{ width: `${inorganicLevel}%` }}
-              />
-            </div>
-          </div>
-        </div>
-
-        {/* Latest Classification Image */}
-        <div className="bg-white rounded-lg shadow-md p-6">
-          <div className="flex justify-between items-center mb-4">
-            <h3 className="text-lg font-semibold">Ảnh rác vừa phân loại</h3>
-            <Camera className="w-5 h-5 text-gray-400" />
-          </div>
-          <div className="bg-gray-900 rounded-lg aspect-video flex items-center justify-center relative overflow-hidden">
-            {lastClassification.imageUrl ? (
-              <img 
-                src={lastClassification.imageUrl} 
-                alt="Rác vừa phân loại" 
-                className="w-full h-full object-cover"
-              />
-            ) : (
-              <>
-                <div className="absolute inset-0 bg-gradient-to-br from-gray-800 to-gray-900"></div>
-                <div className="relative z-10 text-center">
-                  <Camera className="w-16 h-16 text-gray-600 mx-auto mb-2" />
-                  <p className="text-gray-400 text-sm">Chưa có ảnh phân loại...</p>
+    return (
+      <div className="space-y-6">
+        {/* Stats Cards */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {otherStats.map((stat, index) => (
+            <div key={index} className="bg-white rounded-lg shadow-md p-6 hover:shadow-lg transition-shadow">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-gray-500 text-sm">{stat.title}</p>
+                  <h3 className="text-2xl font-bold mt-1">{stat.value}</h3>
+                  <p className="text-sm text-green-600 mt-1">{stat.change}</p>
                 </div>
-              </>
-            )}
-            {lastClassification.imageUrl && (
-              <div className={`absolute top-2 right-2 ${lastClassification.type === 'organic' ? 'bg-green-500' : 'bg-blue-500'} text-white px-3 py-1 rounded-full text-xs font-semibold`}>
-                {lastClassification.type === 'organic' ? 'Hữu cơ' : 'Vô cơ'}
+                <div className={`${stat.color} text-white p-3 rounded-lg`}>
+                  {stat.icon}
+                </div>
               </div>
-            )}
+            </div>
+          ))}
+        </div>
+
+        {/* Cảnh báo và Ảnh song song */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Cảnh báo Card - luôn hiển thị */}
+          <div className={`bg-white rounded-lg shadow-md p-6 border-l-4 ${hasAlert
+            ? (binType === 'ORGANIC' ? 'border-green-500' : 'border-blue-500')
+            : 'border-gray-300'
+            }`}>
+            <div className="flex items-start justify-between">
+              <div className="flex-1">
+                <div className="flex items-center mb-2">
+                  <AlertTriangle className={`w-5 h-5 mr-2 ${hasAlert
+                    ? (binType === 'ORGANIC' ? 'text-green-600' : 'text-blue-600')
+                    : 'text-gray-400'
+                    }`} />
+                  <p className="text-gray-500 text-sm font-semibold">Tình trạng</p>
+                </div>
+                <h3 className={`text-xl font-bold ${hasAlert
+                  ? (binType === 'ORGANIC' ? 'text-green-600' : 'text-blue-600')
+                  : 'text-gray-600'
+                  }`}>
+                  {hasAlert ? alertMessage : 'Ổn định'}
+                </h3>
+                <p className="text-sm text-gray-600 mt-2">
+                  {hasAlert
+                    ? (binType === 'ORGANIC'
+                      ? 'Thùng rác hữu cơ đã đầy, vui lòng đổ rác ngay!'
+                      : 'Thùng rác vô cơ đã đầy, vui lòng đổ rác ngay!')
+                    : 'Tất cả thùng rác đang hoạt động bình thường'}
+                </p>
+              </div>
+              <div className={`${hasAlert
+                ? (binType === 'ORGANIC' ? 'bg-green-500' : 'bg-blue-500')
+                : 'bg-gray-400'
+                } text-white p-3 rounded-lg`}>
+                <AlertTriangle className="w-6 h-6" />
+              </div>
+            </div>
           </div>
-          <div className="mt-4 bg-gray-50 rounded p-3">
-            <div className="flex justify-between text-sm">
-              <span className="text-gray-600">Phân loại gần nhất:</span>
-              <span className={`font-semibold ${lastClassification.type === 'organic' ? 'text-green-600' : 'text-blue-600'}`}>
-                {lastClassification.type === 'organic' ? 'Hữu cơ' : 'Vô cơ'}
-              </span>
+
+          {/* Latest Classification Image */}
+          <div className="bg-white rounded-lg shadow-md p-6">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-semibold">Ảnh rác vừa phân loại</h3>
+              <Camera className="w-5 h-5 text-gray-400" />
             </div>
-            <div className="flex justify-between text-sm mt-1">
-              <span className="text-gray-600">Độ tin cậy:</span>
-              <span className="font-semibold">{lastClassification.confidence}%</span>
+            <div className="bg-gray-900 rounded-lg aspect-[4/3] max-w-md mx-auto flex items-center justify-center relative overflow-hidden">
+              {lastClassification.imageUrl ? (
+                <img
+                  src={lastClassification.imageUrl || liveImageUrl}
+                  alt="Rác vừa phân loại"
+                  className="w-full h-full object-cover"
+                />
+              ) : (
+                <>
+                  <div className="absolute inset-0 bg-gradient-to-br from-gray-800 to-gray-900"></div>
+                  <div className="relative z-10 text-center">
+                    <Camera className="w-16 h-16 text-gray-600 mx-auto mb-2" />
+                    <p className="text-gray-400 text-sm">Chưa có ảnh phân loại...</p>
+                  </div>
+                </>
+              )}
+              {lastClassification.imageUrl && (
+                <div className={`absolute top-2 right-2 ${lastClassification.type === 'organic' ? 'bg-green-500' : 'bg-blue-500'} text-white px-3 py-1 rounded-full text-xs font-semibold`}>
+                  {lastClassification.type === 'organic' ? 'Hữu cơ' : 'Vô cơ'}
+                </div>
+              )}
             </div>
-            <div className="flex justify-between text-sm mt-1">
-              <span className="text-gray-600">Thời gian:</span>
-              <span className="font-semibold">{lastClassification.time}</span>
+            <div className="mt-4 bg-gray-50 rounded p-3">
+              <div className="flex justify-between text-sm">
+                <span className="text-gray-600">Phân loại gần nhất:</span>
+                <span className={`font-semibold ${lastClassification.type === 'organic' ? 'text-green-600' : 'text-blue-600'}`}>
+                  {lastClassification.type === 'organic' ? 'Hữu cơ' : 'Vô cơ'}
+                </span>
+              </div>
+              <div className="flex justify-between text-sm mt-1">
+                <span className="text-gray-600">Thời gian:</span>
+                <span className="font-semibold">{lastClassification.time}</span>
+              </div>
             </div>
           </div>
         </div>
       </div>
-    </div>
-  );
+    );
+  };
 
   const renderLogs = () => (
     <div className="bg-white rounded-lg shadow-md p-6">
-      <div className="flex justify-between items-center mb-4">
+      <div className="mb-4">
         <h3 className="text-lg font-semibold">Nhật ký phân loại</h3>
-        <button className="flex items-center text-sm text-blue-600 hover:text-blue-700">
-          <Download className="w-4 h-4 mr-1" />
-          Xuất CSV
-        </button>
       </div>
       <div className="overflow-x-auto">
         <table className="w-full">
@@ -298,8 +425,6 @@ const SmartTrashDashboard = () => {
             <tr className="border-b">
               <th className="text-left py-3 px-4 text-sm font-semibold text-gray-600">Thời gian</th>
               <th className="text-left py-3 px-4 text-sm font-semibold text-gray-600">Loại rác</th>
-              <th className="text-left py-3 px-4 text-sm font-semibold text-gray-600">Độ tin cậy</th>
-              <th className="text-left py-3 px-4 text-sm font-semibold text-gray-600">Trạng thái</th>
             </tr>
           </thead>
           <tbody>
@@ -310,12 +435,6 @@ const SmartTrashDashboard = () => {
                   <span className={`inline-block px-3 py-1 rounded-full text-xs font-semibold ${log.type === 'Hữu cơ' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'
                     }`}>
                     {log.type}
-                  </span>
-                </td>
-                <td className="py-3 px-4 text-sm font-medium">{log.confidence}%</td>
-                <td className="py-3 px-4">
-                  <span className="inline-block px-3 py-1 rounded-full text-xs font-semibold bg-green-100 text-green-700">
-                    Thành công
                   </span>
                 </td>
               </tr>
@@ -461,15 +580,6 @@ const SmartTrashDashboard = () => {
             >
               Nhật ký
             </button>
-            <button
-              onClick={() => setActiveTab('settings')}
-              className={`py-4 px-1 border-b-2 font-medium text-sm transition-colors ${activeTab === 'settings'
-                ? 'border-blue-600 text-blue-600'
-                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                }`}
-            >
-              Cài đặt
-            </button>
           </div>
         </div>
       </nav>
@@ -478,7 +588,6 @@ const SmartTrashDashboard = () => {
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {activeTab === 'overview' && renderOverview()}
         {activeTab === 'logs' && renderLogs()}
-        {activeTab === 'settings' && renderSettings()}
       </main>
     </div>
   );

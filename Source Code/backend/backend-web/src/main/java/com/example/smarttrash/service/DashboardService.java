@@ -79,7 +79,7 @@ public class DashboardService {
     public Settings getSettings() {
         SettingsEntity entity = settingsRepository.findAll().stream().findFirst().orElse(null);
         if (entity == null) {
-            return new Settings(75, 85, "ws://localhost:8765", false);
+            return new Settings(75, 85, "wss://ntdung.systems/ws\n", false);
         }
         return new Settings(
                 entity.getFullThresholdPercent(),
